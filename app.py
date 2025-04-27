@@ -7,7 +7,8 @@ API_URL = "http://localhost:8000"
 
 # Page config with wide layout
 st.set_page_config(
-    page_title="MindsDB Explorer",
+    page_title="Ragify",
+    page_description="Ragify - Your AI Assistant for Data Exploration",
     page_icon="📚",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -348,16 +349,17 @@ with tab2:
                                 config_values[field] = st.text_input(
                                     field_label,
                                     value=val.get("default", ""),
-                                    type="password" if "password" in field.lower() else "default"
+                                    type="password" if "password" in field.lower() else "default",
+                                    help=val.get("description")
                                 )
                             elif field_type == "integer":
-                                config_values[field] = st.number_input(field_label, value=val.get("default", 0))
+                                config_values[field] = st.number_input(field_label, value=val.get("default", 0),help=val.get("description"))
                             elif field_type == "boolean":
-                                config_values[field] = st.checkbox(field_label, value=val.get("default", False))
+                                config_values[field] = st.checkbox(field_label, value=val.get("default", False), help=val.get("description"))
                             elif field_type == "array":
-                                config_values[field] = st.text_area(field_label).split(",")
+                                config_values[field] = st.text_area(field_label, help=val.get('description')).split(",")
                             elif field_type == "object":
-                                config_values[field] = st.text_area(field_label, value=str(val.get("default", {})))
+                                config_values[field] = st.text_area(field_label, value=str(val.get("default", {}), help=val.get("description")))
                         with col2:
                             if val.get("description"):
                                 st.info(val.get("description"))
