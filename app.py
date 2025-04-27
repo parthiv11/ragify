@@ -194,7 +194,16 @@ with st.sidebar:
                         st.session_state.selected_resources['dbs']
                     )
                     
-                    if "message" in result:
+                    if result['status'] == "success":
+                        # Show warnings first if any
+                        if result.get("warnings"):
+                            st.warning("\n".join(result["warnings"]))
+                            
+                        # Show any non-blocking errors
+                        if result.get("errors"):
+                            st.error("\n".join(result["errors"]))
+                            
+                        # Show success message
                         msg = "✅ Agent updated successfully!\n\n"
                         if result.get("skills_added"):
                             msg += f"Added: {', '.join(result['skills_added'])}\n"
@@ -203,7 +212,10 @@ with st.sidebar:
                         st.success(msg)
                         st.session_state.agent_ready = True
                     else:
-                        st.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
+                        error_msg = result.get('error', 'Unknown error')
+                        if result.get('details'):
+                            error_msg += "\n\n" + "\n".join(result['details'])
+                        st.error(f"❌ Failed to update agent: {error_msg}")
         else:
             st.info("Select resources above to update agent skills")
     
@@ -441,7 +453,7 @@ with tab2:
                                 )
                                 
                                 if "message" in result:
-                                    st.success("✅ Resources created successfully!")
+                                    st.success(f"✅ Resources created successfully!\n{ result['message']}")
                                     # Clear source-related session state
                                     st.session_state.source_name = None
                                     st.session_state.user_source_name = None
@@ -481,7 +493,7 @@ with tab2:
                                 - Created: {kb['created_at']}
                                 """)
                 
-                # Display DB
+                # Display DB - Use normalize_db_name for consistency
                 db_name = f"{source_name.lower().replace('-', '_').replace(' ', '_')}_db"
                 st.write("🗄️ **Database**")
                 st.write(f"`{db_name}`")

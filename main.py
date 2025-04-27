@@ -46,6 +46,28 @@ EMBEDDING_CONFIG = {
     'max_length': int(os.getenv('EMBEDDING_MODEL_MAX_LENGTH', 512))
 }
 
+# Ensure the embedding and ml_engine model exists
+try:
+    langchain_ml_engine = server.ml_engines.get("embedding")
+except Exception:
+    langchain_ml_engine = server.ml_engines.create(
+        name="embedding",
+        handler="langchain_embedding",
+    )
+try:
+    embedding_model = server.models.get("hf_embedding_model")
+except Exception:
+    embedding_model = server.models.create(
+        name="hf_embedding_model",
+        engine="embedding",
+        options={
+            "model": EMBEDDING_CONFIG['model'],
+            "class": "HuggingFaceEmbeddings",
+        },
+        predict="embedding",
+    )
+
+
 # Ensure default agent exists with configured parameters
 try:
     agent = project.agents.get(DEFAULT_AGENT_NAME)
@@ -58,7 +80,9 @@ except Exception:
             "prompt_template": DEFAULT_PROMPT,
             "max_tokens": MODEL_CONFIG['max_tokens'],
             "temperature": MODEL_CONFIG['temperature'],
-            "provider": MODEL_CONFIG['provider']
+            "provider": MODEL_CONFIG['provider'],
+            "openai_api_key": os.getenv('OPENAI_API_KEY', ''),
+            "base_url": os.getenv('OPENAI_API_BASE', 'https://api.openai.com'),
             
         }
     )
@@ -148,6 +172,11 @@ def get_or_create_db_skill(db_name: str, description: str) -> Optional[str]:
     except Exception as e:
         print(f"Error with DB skill: {e}")
         return None
+
+# Helper function for consistent database naming
+def normalize_db_name(source_name: str) -> str:
+    """Generate consistent database name from source name"""
+    return f"{source_name.lower().replace('-', '_').replace(' ', '_')}_db"
 
 # ---------------------------
 # 1. List available connectors
@@ -260,7 +289,7 @@ def create_kb(data: IngestData):
         read_result = session["source"].read()
         
         # Handle the DuckDB cache file for the source DB
-        db_name = f"{source_prefix}_db"
+        db_name = normalize_db_name(source_prefix)
         if hasattr(read_result, '_cache') and read_result._cache:
             cache_path = read_result._cache.db_path
             if os.path.exists(cache_path):
@@ -278,12 +307,35 @@ def create_kb(data: IngestData):
                         )
                         created_dbs.append(db_name)
                     except Exception as e:
-                        print(f"Error creating DuckDB database: {e}")
-
+                        if e.args[0].startswith("Database already exists"):
+                            server.databases.drop(db_name)
+                            server.databases.create(
+                                db_name,
+                                engine='duckdb',
+                                connection_args={
+                                    'database': temp_db_path
+                                }
+                            )
+                            created_dbs.append(db_name)
+                        else:
+                            print(f"Error creating datasource: {e}")
+            
         # Get list of existing KBs
         kbs = [i.name for i in server.knowledge_bases.list()]
-        
-        
+        try:
+            hf_embedding_model = server.models.hf_embedding_model
+        except Exception as e:
+            # create the embedding model if it doesn't exist
+            hf_embedding_model = server.models.create(
+                name="hf_embedding_model",
+                type="embedding",
+                provider="huggingface",
+                model=EMBEDDING_CONFIG['model'],
+                params={
+                    "max_length": EMBEDDING_CONFIG['max_length'],
+                    "provider": EMBEDDING_CONFIG['provider']
+                }
+            )
         
         for stream in session["streams"]:
             # New naming convention
@@ -414,39 +466,67 @@ def create_agent_skills(data: AgentSkillsData):
     try:
         new_skills = []
         skill_mapping = {'kbs': [], 'dbs': []}
+        warnings = []
+        errors = []
 
         # Process knowledge bases
         for kb_name in data.kb_names:
-            skill_name = get_or_create_kb_skill(kb_name, f"Knowledge from {kb_name}")
-            if skill_name:
-                new_skills.append(skill_name)
-                skill_mapping['kbs'].append({'kb': kb_name, 'skill': skill_name})
+            try:
+                skill_name = get_or_create_kb_skill(kb_name, f"Knowledge from {kb_name}")
+                if skill_name:
+                    new_skills.append(skill_name)
+                    skill_mapping['kbs'].append({'kb': kb_name, 'skill': skill_name})
+            except Exception as e:
+                if "already exists" in str(e):
+                    warnings.append(f"KB skill for {kb_name} already exists and will be reused")
+                else:
+                    errors.append(f"Failed to create KB skill for {kb_name}: {str(e)}")
 
         # Process databases
         for db_name in data.db_names:
-            skill_name = get_or_create_db_skill(db_name, f"SQL access to {db_name} database")
-            if skill_name:
-                new_skills.append(skill_name)
-                skill_mapping['dbs'].append({'db': db_name, 'skill': skill_name})
+            try:
+                # First verify DB exists
+                try:
+                    server.databases.get(db_name)
+                except Exception as e:
+                    errors.append(f"Database '{db_name}' does not exist. Make sure to create it first.")
+                    continue
 
-        # Update agent
-        current_skills = set(s.name for s in agent.skills)
-        new_skills_set = set(s for s in new_skills)
-        
-        skills_to_add = list(new_skills_set - current_skills)
-        skills_to_remove = list(current_skills - new_skills_set)
-        
-        # Update agent's skills
-        agent.skills=[server.skills.get(i)  for i in new_skills ]
-        server.agents.update(agent.name, agent)
+                skill_name = get_or_create_db_skill(db_name, f"SQL access to {db_name} database")
+                if skill_name:
+                    new_skills.append(skill_name)
+                    skill_mapping['dbs'].append({'db': db_name, 'skill': skill_name})
+            except Exception as e:
+                errors.append(f"Failed to create DB skill for {db_name}: {str(e)}")
 
-        return {
-            'status': 'success',
-            'agent_name': DEFAULT_AGENT_NAME,
-            'skills_added': skills_to_add,
-            'skills_removed': skills_to_remove,
-            'skill_mapping': skill_mapping
-        }
+        # Update agent if we have any valid skills
+        if new_skills:
+            current_skills = set(s.name for s in agent.skills)
+            new_skills_set = set(s for s in new_skills)
+            
+            skills_to_add = list(new_skills_set - current_skills)
+            skills_to_remove = list(current_skills - new_skills_set)
+            
+            # Update agent's skills
+            agent.skills = [server.skills.get(i) for i in new_skills]
+            server.agents.update(agent.name, agent)
+
+            return {
+                'status': 'success',
+                'agent_name': DEFAULT_AGENT_NAME,
+                'skills_added': skills_to_add,
+                'skills_removed': skills_to_remove,
+                'skill_mapping': skill_mapping,
+                'warnings': warnings,
+                'errors': errors
+            }
+        else:
+            return {
+                'status': 'error',
+                'error': 'No valid skills could be created',
+                'details': errors
+            }
+            
     except Exception as e:
         return {'status': 'error', 'error': str(e)}
 
