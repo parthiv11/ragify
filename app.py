@@ -157,7 +157,8 @@ with st.sidebar:
                         col1, col2 = st.columns([0.1, 0.9])
                         with col1:
                             st.checkbox(
-                                "",
+                                label=f"Select knowledge base {kb['alias']}",
+                                label_visibility="collapsed",
                                 key=f"kb_{kb['kb_name']}",
                                 value=kb['kb_name'] in st.session_state.selected_resources['kbs'],
                                 on_change=lambda k=kb['kb_name']: toggle_resource('kbs', k)
@@ -171,7 +172,8 @@ with st.sidebar:
                 col1, col2 = st.columns([0.1, 0.9])
                 with col1:
                     st.checkbox(
-                        "",
+                        label=f"Select database {db_name}",
+                        label_visibility="collapsed",
                         key=f"db_{db_name}",
                         value=db_name in st.session_state.selected_resources['dbs'],
                         on_change=lambda d=db_name: toggle_resource('dbs', d)
@@ -278,10 +280,10 @@ with tab1:
 
 # --- Manage Resources Tab ---
 with tab2:
-    st.write("## 🔧 Create New Resources")
+    st.write("## 🔧 Connect Data Sources")
     
     # Progress steps
-    steps = ["Select Connector", "Configure Source", "Select Data", "Create Resources"]
+    steps = ["Select Connector", "Configure Source", "Select Data", "Create Knowledge Base"]
     current_step = st.session_state.current_step
     
     # Progress bar
@@ -298,11 +300,16 @@ with tab2:
     st.divider()
     
     # Create New Source section
-    with st.expander("Create New Source", expanded=current_step == 1):
+    with st.expander("Connect New Data Source", expanded=current_step == 1):
         # Step 1: Choose Connector
         if current_step == 1:
             source_options = get_sources()
-            selected_source = st.selectbox("Select a Connector:", source_options)
+            st.write("#### Select a Data Source")
+            selected_source = st.selectbox(
+                "Available Connectors",
+                source_options,
+                key="source_selector"
+            )
             
             col1, col2 = st.columns(2)
             with col1:
@@ -392,8 +399,9 @@ with tab2:
         elif current_step == 3:
             if st.session_state.streams_fetched:
                 st.subheader("Select Data Streams")
+                st.write("#### Choose the data streams to import")
                 selected_streams = st.multiselect(
-                    "Select Data Streams",
+                    "Available Data Streams",
                     st.session_state.available_streams,
                     key="stream_selector"
                 )
@@ -419,15 +427,17 @@ with tab2:
                         with stream_container:
                             col1, col2 = st.columns(2)
                             with col1:
+                                st.write("#### Metadata Configuration")
                                 metadata_fields = st.multiselect(
-                                    "Metadata Fields",
+                                    "Select Metadata Fields",
                                     list(st.session_state.schema_records[stream].keys()),
                                     help="Fields to use for filtering and organization",
                                     key=f"metadata_{stream}"
                                 )
                             with col2:
+                                st.write("#### Content Configuration") 
                                 content_fields = st.multiselect(
-                                    "Content Fields",
+                                    "Select Content Fields",
                                     list(st.session_state.schema_records[stream].keys()),
                                     help="Fields containing the main content",
                                     key=f"content_{stream}"
@@ -435,14 +445,14 @@ with tab2:
                             metadata_columns[stream] = metadata_fields
                             content_columns[stream] = content_fields
                         st.divider()
-                    
+
                     col1, col2 = st.columns([1, 4])
                     with col1:
-                        if st.button("← Back"):
+                        if st.button("← Back", help="Return to previous step"):
                             st.session_state.current_step = 2
                             st.rerun()
                     with col2:
-                        if st.button("Create Resources →", type="primary"):
+                        if st.button("Create Resources →", type="primary", help="Create knowledge base and database resources"):
                             with st.spinner("Creating AI resources..."):
                                 result = create_kb(
                                     source_name=st.session_state.source_name,
@@ -471,7 +481,7 @@ with tab2:
                                     st.error(f"❌ Creation failed: {result.get('error', 'Unknown error')}")
     
     # View Resources (simplified view without skill selection)
-    st.write("### Existing Resources")
+    st.write("### Connected Data Sources")
     if sources:
         for source_name, details in sources.items():
             with st.expander(f"{details['status']} {source_name}", expanded=True):
@@ -487,16 +497,21 @@ with tab2:
                         with col1:
                             st.write(f"∟ {kb['alias']}")
                         with col2:
-                            if st.button("ℹ️", key=f"info_{kb['kb_name']}"):
+                            if st.button(
+                                "ℹ️", 
+                                key=f"info_{kb['kb_name']}", 
+                                help=f"View details for {kb['alias']}"
+                            ):
                                 st.info(f"""
-                                - KB Name: `{kb['kb_name']}`
+                                **Knowledge Base Details**
+                                - Name: `{kb['kb_name']}`
                                 - Stream: {kb['alias']}
                                 - Created: {kb['created_at']}
                                 """)
                 
-                # Display DB - Use normalize_db_name for consistency
+                # Display DB with clear label
                 db_name = f"{source_name.lower().replace('-', '_').replace(' ', '_')}_db"
-                st.write("🗄️ **Database**")
+                st.write("🗄️ **Connected Database**")
                 st.write(f"`{db_name}`")
 
 # Toggle resource selection function

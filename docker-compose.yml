@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  mindsdb:
+    image: mindsdb/mindsdb:latest
+    ports:
+      - "47334:47334"
+      - "47335:47335"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "47334"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ragify-net
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"  # FastAPI
+      - "8501:8501"  # Streamlit
+    environment:
+      - MINDSDB_HOST=mindsdb
+      - MINDSDB_PORT=47334
+      - API_PORT=8000
+      - STREAMLIT_PORT=8501
+    depends_on:
+      mindsdb:
+        condition: service_healthy
+    networks:
+      - ragify-net
+
+networks:
+  ragify-net:
+    driver: bridge
