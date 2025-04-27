@@ -247,6 +247,7 @@ class IngestData(BaseModel):
 
 @app.post("/create_kb")
 def create_kb(data: IngestData):
+    session['streams'] = data.streams
     if not session["streams"]:
         return {"error": "No streams selected"}
 

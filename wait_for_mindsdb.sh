@@ -1,17 +1,34 @@
-#!/bin/bash
+# Use the official Python base image
+FROM python:3.10-slim
 
-# Function to check if MindsDB is up
-wait_for_mindsdb() {
-    while ! nc -z localhost 47334; do
-        echo "Waiting for MindsDB to start..."
-        sleep 1
-    done
-    echo "MindsDB is up!"
-}
+# Install system dependencies and tools for checking network connection
+RUN apt-get update && apt-get install -y \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
 
-# Call the function
-wait_for_mindsdb
+# Set the working directory
+WORKDIR /app
 
-# Start FastAPI and Streamlit once MindsDB is up
-uvicorn app:app --host 0.0.0.0 --port 8000 & 
-streamlit run app.py 
+# Copy the requirements.txt and install the dependencies
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
+
+
+
+# Copy the application code into the container
+COPY . /app
+
+# Copy the wait script into the container
+COPY wait_for_mindsdb.sh /app/wait_for_mindsdb.sh
+
+# Make the wait script executable
+RUN chmod +x /app/wait_for_mindsdb.sh
+
+# Expose the necessary ports for MindsDB, FastAPI, and Streamlit
+EXPOSE 47334 8000 8501
+
+# Start MindsDB in the background
+RUN python -m mindsdb &
+
+# Run the script that waits for MindsDB and then starts FastAPI and Streamlit
+CMD ["/app/wait_for_mindsdb.sh"]

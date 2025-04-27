@@ -24,7 +24,19 @@ if "current_step" not in st.session_state:
     st.session_state.current_step = 1
 if "selected_resources" not in st.session_state:
     st.session_state.selected_resources = {'kbs': [], 'dbs': []}
-    
+
+# Add source-related session states
+if "source_name" not in st.session_state:
+    st.session_state.source_name = None
+if "user_source_name" not in st.session_state:
+    st.session_state.user_source_name = None
+if "source_description" not in st.session_state:
+    st.session_state.source_description = None
+if "config_values" not in st.session_state:
+    st.session_state.config_values = None
+if "selected_streams" not in st.session_state:
+    st.session_state.selected_streams = []
+
 # Initialize other session states...
 if "source_selected" not in st.session_state:
     st.session_state.source_selected = False
@@ -278,13 +290,13 @@ with tab2:
         # Step 1: Choose Connector
         if current_step == 1:
             source_options = get_sources()
-            source_name = st.selectbox("Select a Connector:", source_options)
+            selected_source = st.selectbox("Select a Connector:", source_options)
             
             col1, col2 = st.columns(2)
             with col1:
                 user_source_name = st.text_input(
                     "Custom Name",
-                    value=source_name.replace('source-', '') if source_name else '',
+                    value=selected_source.replace('source-', '') if selected_source else '',
                     help="Give this source a friendly name"
                 )
             with col2:
@@ -294,10 +306,12 @@ with tab2:
                 )
             
             if st.button("Next →", type="primary"):
-                if source_name and user_source_name:
-                    st.session_state.source_selected = True
+                if selected_source and user_source_name:
+                    # Store values in session state
+                    st.session_state.source_name = selected_source
                     st.session_state.user_source_name = user_source_name
                     st.session_state.source_description = source_description
+                    st.session_state.source_selected = True
                     st.session_state.current_step = 2
                     st.rerun()
                 else:
@@ -305,7 +319,7 @@ with tab2:
         
         # Step 2: Configure Source
         elif current_step == 2:
-            spec = get_source_spec(source_name)
+            spec = get_source_spec(st.session_state.source_name)
             st.info(f"Configuring {st.session_state.user_source_name}")
             
             if isinstance(spec, dict):
@@ -347,10 +361,11 @@ with tab2:
                         st.rerun()
                     if next:
                         with st.spinner("Testing connection..."):
-                            response = configure_source(source_name, config_values)
+                            response = configure_source(st.session_state.source_name, config_values)
                             if "message" in response:
                                 st.success("✅ Connection successful!")
                                 st.session_state.source_configured = True
+                                st.session_state.config_values = config_values
                                 st.session_state.current_step = 3
                                 streams = get_streams()
                                 if streams:
@@ -363,6 +378,7 @@ with tab2:
         # Step 3: Select Streams & Fields
         elif current_step == 3:
             if st.session_state.streams_fetched:
+                st.subheader("Select Data Streams")
                 selected_streams = st.multiselect(
                     "Select Data Streams",
                     st.session_state.available_streams,
@@ -371,19 +387,23 @@ with tab2:
                 
                 if selected_streams:
                     if st.button("Load Fields"):
-                        st.session_state.selected_streams = selected_streams
+                        st.session_state.selected_streams = selected_streams or []
                         select_streams(selected_streams)
                         records = fetch_schema()
                         if "records" in records:
                             st.session_state.schema_records = records["records"]
                             st.rerun()
                 
-                if "schema_records" in st.session_state:
+                # Add null check before iteration
+                if st.session_state.selected_streams and "schema_records" in st.session_state:
+                    st.subheader("Configure Fields")
                     metadata_columns = {}
                     content_columns = {}
                     
                     for stream in st.session_state.selected_streams:
-                        with st.expander(f"Configure {stream}", expanded=True):
+                        st.write(f"### Stream: {stream}")
+                        stream_container = st.container()
+                        with stream_container:
                             col1, col2 = st.columns(2)
                             with col1:
                                 metadata_fields = st.multiselect(
@@ -401,6 +421,7 @@ with tab2:
                                 )
                             metadata_columns[stream] = metadata_fields
                             content_columns[stream] = content_fields
+                        st.divider()
                     
                     col1, col2 = st.columns([1, 4])
                     with col1:
@@ -411,7 +432,7 @@ with tab2:
                         if st.button("Create Resources →", type="primary"):
                             with st.spinner("Creating AI resources..."):
                                 result = create_kb(
-                                    source_name=source_name,
+                                    source_name=st.session_state.source_name,
                                     user_source_name=st.session_state.user_source_name,
                                     source_description=st.session_state.source_description,
                                     streams=st.session_state.selected_streams,
@@ -421,6 +442,14 @@ with tab2:
                                 
                                 if "message" in result:
                                     st.success("✅ Resources created successfully!")
+                                    # Clear source-related session state
+                                    st.session_state.source_name = None
+                                    st.session_state.user_source_name = None
+                                    st.session_state.source_description = None
+                                    st.session_state.config_values = None
+                                    st.session_state.selected_streams = None
+                                    st.session_state.schema_records = None
+                                    st.session_state.available_streams = None
                                     st.session_state.kbs = []
                                     get_kbs()
                                     st.session_state.current_step = 4
