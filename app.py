@@ -8,7 +8,6 @@ API_URL = "http://localhost:8000"
 # Page config with wide layout
 st.set_page_config(
     page_title="Ragify",
-    page_description="Ragify - Your AI Assistant for Data Exploration",
     page_icon="📚",
     layout="wide",
     initial_sidebar_state="expanded"
