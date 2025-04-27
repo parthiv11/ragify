@@ -463,7 +463,7 @@ with tab2:
                                     content_columns=content_columns
                                 )
                                 
-                                if "message" in result:
+                                if result['status'] == "success":
                                     st.success(f"✅ Resources created successfully!\n{ result['message']}")
                                     # Clear source-related session state
                                     st.session_state.source_name = None
