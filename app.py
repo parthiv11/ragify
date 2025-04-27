@@ -120,6 +120,10 @@ def hide_loading():
 def set_operation_status(status: str, message: str):
     st.session_state.operation_status = {"status": status, "message": message}
 
+def delete_source(source_name: str):
+    """Delete a source and all its associated resources"""
+    return requests.delete(f"{API_URL}/delete_source/{source_name}").json()
+
 # --- Sidebar ---
 with st.sidebar:
     st.title("📚 Available Sources")
@@ -462,8 +466,8 @@ with tab2:
                                     metadata_columns=metadata_columns,
                                     content_columns=content_columns
                                 )
-                                
-                                if result['status'] == "success":
+                               
+                                if "message" in result:
                                     st.success(f"✅ Resources created successfully!\n{ result['message']}")
                                     # Clear source-related session state
                                     st.session_state.source_name = None
@@ -485,7 +489,34 @@ with tab2:
     if sources:
         for source_name, details in sources.items():
             with st.expander(f"{details['status']} {source_name}", expanded=True):
-                st.caption(f"Created: {details['created_at']}")
+                # Main header with info and delete button
+                header_cols = st.columns([0.9, 0.1])
+                with header_cols[0]:
+                    st.caption(f"Created: {details['created_at']}")
+                with header_cols[1]:
+                    if st.button("🗑️", key=f"delete_{source_name}", help="Delete source"):
+                        st.session_state.confirming_delete = source_name
+
+                # Confirmation dialog
+                if st.session_state.get('confirming_delete') == source_name:
+                    confirm_cols = st.columns([0.6, 0.2, 0.2])
+                    with confirm_cols[0]:
+                        st.warning("Delete this source?", icon="⚠️")
+                    with confirm_cols[1]:
+                        if st.button("Yes", key=f"confirm_delete_{source_name}", type="primary"):
+                            with st.spinner(""):
+                                result = delete_source(source_name)
+                                if "message" in result:
+                                    st.session_state.kbs = []
+                                    get_kbs()
+                                    st.rerun()
+                                else:
+                                    st.error(result.get("error", "Unknown error occurred"))
+                    with confirm_cols[2]:
+                        if st.button("No", key=f"cancel_delete_{source_name}"):
+                            st.session_state.confirming_delete = None
+                            st.rerun()
+                
                 if details['description']:
                     st.info(details['description'])
                 

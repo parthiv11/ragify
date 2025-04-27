@@ -12,6 +12,7 @@ from typing import Dict, Optional, List
 import os
 from dotenv import load_dotenv
 import shutil
+import duckdb
 
 # Load environment variables
 load_dotenv()
@@ -297,6 +298,14 @@ def create_kb(data: IngestData):
                 temp_db_path = f"/tmp/{db_name}.duckdb"
                 if db_name not in created_dbs:  # Only create DB once per source
                     shutil.copy2(cache_path, temp_db_path)
+                    con=duckdb.connect(temp_db_path)
+                    tables = [t[0] for t in con.execute("SHOW TABLES").fetchall()]
+                    table_to_drop = [t for t in tables if t.startswith("airbyte_") or t not in data.streams]
+                    for t in table_to_drop:
+                        con.execute(f"DROP TABLE {t}")
+                    con.close()
+                    # Create the database in MindsDB
+
                     try:
                         server.databases.create(
                             db_name,
@@ -574,5 +583,58 @@ def list_kbs():
                 "source_name": kb.source_name,
                 "streams_used": kb.streams_used,
                 "created_at": kb.created_at} for kb in kbs]
+    finally:
+        db.close()
+
+# ---------------------------
+# Source Deletion
+# ---------------------------
+@app.delete("/delete_source/{source_name}")
+def delete_source(source_name: str):
+    """Delete a source and all its associated resources"""
+    db = SessionLocal()
+    try:
+        # Find all KBs associated with this source
+        kbs = db.query(KBRegistry).filter(
+            (KBRegistry.source_name == source_name) | 
+            (KBRegistry.user_source_name == source_name)
+        ).all()
+        
+        # Delete KBs from MindsDB
+        for kb in kbs:
+            try:
+                # Delete KB skills first
+                skill_name = f"kb_skill_{kb.kb_name}"
+                try:
+                    project.skills.drop(skill_name)
+                except Exception as e:
+                    print(f"Error deleting skill {skill_name}: {e}")
+                
+                # Delete the KB
+                try:
+                    server.knowledge_bases.drop(kb.kb_name)
+                except Exception as e:
+                    print(f"Error deleting KB {kb.kb_name}: {e}")
+            except Exception as e:
+                print(f"Error processing KB {kb.kb_name}: {e}")
+
+        # Delete associated database
+        db_name = normalize_db_name(source_name)
+        try:
+            server.databases.drop(db_name)
+        except Exception as e:
+            print(f"Error deleting database {db_name}: {e}")
+
+        # Delete KB records from our registry
+        db.query(KBRegistry).filter(
+            (KBRegistry.source_name == source_name) | 
+            (KBRegistry.user_source_name == source_name)
+        ).delete()
+        db.commit()
+
+        return {"message": f"Source {source_name} and all associated resources deleted successfully"}
+    except Exception as e:
+        db.rollback()
+        return {"error": f"Failed to delete source: {str(e)}"}
     finally:
         db.close()
