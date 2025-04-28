@@ -12,3 +12,4 @@ python-dotenv
 streamlit-chat
 extra-streamlit-components
 sentence-transformers
+langchain_core

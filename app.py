@@ -124,6 +124,10 @@ def delete_source(source_name: str):
     """Delete a source and all its associated resources"""
     return requests.delete(f"{API_URL}/delete_source/{source_name}").json()
 
+def normalize_db_name(source_name: str) -> str:
+    """Generate consistent database name from source name"""
+    return f"{source_name.lower().replace('-', '_').replace(' ', '_')}_db"
+
 # --- Sidebar ---
 with st.sidebar:
     st.title("📚 Available Sources")
@@ -170,8 +174,8 @@ with st.sidebar:
                         with col2:
                             st.write(f"🔹 {kb['alias']}")
                 
-                # Database
-                db_name = f"{source_name.lower().replace('-', '_').replace(' ', '_')}_db"
+                # Database - use source_name which is already user_source_name here
+                db_name = normalize_db_name(source_name)  # source_name is already user_source_name in this context
                 st.write("🗄️ **Database**")
                 col1, col2 = st.columns([0.1, 0.9])
                 with col1:
@@ -539,11 +543,6 @@ with tab2:
                                 - Stream: {kb['alias']}
                                 - Created: {kb['created_at']}
                                 """)
-                
-                # Display DB with clear label
-                db_name = f"{source_name.lower().replace('-', '_').replace(' ', '_')}_db"
-                st.write("🗄️ **Connected Database**")
-                st.write(f"`{db_name}`")
 
 # Toggle resource selection function
 def toggle_resource(resource_type, resource_name):

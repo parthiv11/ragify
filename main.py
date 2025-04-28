@@ -1,3 +1,4 @@
+import time
 from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
 from airbyte import get_source, get_available_connectors
@@ -21,11 +22,17 @@ load_dotenv()
 app = FastAPI(title="AI Agent with MindsDB + Airbyte")
 
 # Connect to MindsDB
-try:
-    server = mdb.connect()
-    project = server.get_project(os.getenv('MINDSDB_PROJECT', 'mindsdb'))
-except Exception as e:
-    raise RuntimeError(f"Error connecting to MindsDB: {e}")
+while True:
+    try:
+        server = mdb.connect()
+        project = server.get_project(os.getenv('MINDSDB_PROJECT', 'mindsdb'))
+        break
+    except Exception as e:
+        time.sleep(5)  # Retry after 5 seconds
+        print(f"Error connecting to MindsDB: {e}")
+        print(f"Retrying connection to MindsDB...")
+        # raise RuntimeError(f"Error connecting to MindsDB: {e}")
+        
 
 # Model Configuration from environment
 DEFAULT_AGENT_NAME = os.getenv('DEFAULT_AGENT_NAME', 'universal_agent')
@@ -125,7 +132,7 @@ def get_or_create_kb_skill(kb_name: str, description: str) -> Optional[str]:
     skill_name = f"kb_skill_{kb_name}"  # Simplified KB skill name
     try:
         # Try to find existing skill for this KB
-        existing_skills = [s for s in agent.skills if 
+        existing_skills = [s for s in server.skills.list() if 
                          s.type == 'retrieval' and 
                          s.params.get('source') == kb_name]
         if existing_skills:
@@ -176,7 +183,12 @@ def get_or_create_db_skill(db_name: str, description: str) -> Optional[str]:
 
 # Helper function for consistent database naming
 def normalize_db_name(source_name: str) -> str:
-    """Generate consistent database name from source name"""
+    """Generate consistent database name from source name.
+    Converts user source name to a valid database name by:
+    - Converting to lowercase
+    - Replacing hyphens and spaces with underscores
+    - Adding _db suffix
+    """
     return f"{source_name.lower().replace('-', '_').replace(' ', '_')}_db"
 
 # ---------------------------
@@ -290,23 +302,33 @@ def create_kb(data: IngestData):
         read_result = session["source"].read()
         
         # Handle the DuckDB cache file for the source DB
-        db_name = normalize_db_name(source_prefix)
+        db_name = normalize_db_name(data.source_name)  # Use user_source_name here
         if hasattr(read_result, '_cache') and read_result._cache:
+            # Create a temporary copy of the DuckDB file
+            temp_db_path = f"/tmp/{db_name}.duckdb"
             cache_path = read_result._cache.db_path
-            if os.path.exists(cache_path):
-                # Create a temporary copy of the DuckDB file
-                temp_db_path = f"/tmp/{db_name}.duckdb"
-                if db_name not in created_dbs:  # Only create DB once per source
-                    shutil.copy2(cache_path, temp_db_path)
-                    con=duckdb.connect(temp_db_path)
-                    tables = [t[0] for t in con.execute("SHOW TABLES").fetchall()]
-                    table_to_drop = [t for t in tables if t.startswith("airbyte_") or t not in data.streams]
-                    for t in table_to_drop:
-                        con.execute(f"DROP TABLE {t}")
-                    con.close()
-                    # Create the database in MindsDB
+            if db_name not in created_dbs:  # Only create DB once per source
+                shutil.copy2(cache_path, temp_db_path)
+                con=duckdb.connect(temp_db_path)
+                tables = [t[0] for t in con.execute("SHOW TABLES").fetchall()]
+                table_to_drop = [t for t in tables if t.startswith("airbyte_") or t not in data.streams]
+                for t in table_to_drop:
+                    con.execute(f"DROP TABLE {t}")
+                con.close()
+                # Create the database in MindsDB
 
-                    try:
+                try:
+                    server.databases.create(
+                        db_name,
+                        engine='duckdb',
+                        connection_args={
+                            'database': temp_db_path
+                        }
+                    )
+                    created_dbs.append(db_name)
+                except Exception as e:
+                    if e.args[0].startswith("Database already exists"):
+                        server.databases.drop(db_name)
                         server.databases.create(
                             db_name,
                             engine='duckdb',
@@ -315,19 +337,8 @@ def create_kb(data: IngestData):
                             }
                         )
                         created_dbs.append(db_name)
-                    except Exception as e:
-                        if e.args[0].startswith("Database already exists"):
-                            server.databases.drop(db_name)
-                            server.databases.create(
-                                db_name,
-                                engine='duckdb',
-                                connection_args={
-                                    'database': temp_db_path
-                                }
-                            )
-                            created_dbs.append(db_name)
-                        else:
-                            print(f"Error creating datasource: {e}")
+                    else:
+                        print(f"Error creating datasource: {e}")
             
         # Get list of existing KBs
         kbs = [i.name for i in server.knowledge_bases.list()]
@@ -618,8 +629,13 @@ def delete_source(source_name: str):
             except Exception as e:
                 print(f"Error processing KB {kb.kb_name}: {e}")
 
-        # Delete associated database
-        db_name = normalize_db_name(source_name)
+        # Delete associated database - use user_source_name from the KB
+        if kbs:
+            db_name = normalize_db_name(kbs[0].user_source_name)
+        else:
+            # Fallback to source_name if no KB found
+            db_name = normalize_db_name(source_name)
+            
         try:
             server.databases.drop(db_name)
         except Exception as e:
