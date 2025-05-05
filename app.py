@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import time
 from datetime import datetime
+from requests.exceptions import ConnectionError, Timeout, RequestException
 
 API_URL = "http://localhost:8000"
 
@@ -12,6 +13,27 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+def check_api_health():
+    """Check if the API is accessible"""
+    try:
+        response = requests.get(f"{API_URL}/health", timeout=5)
+        if response.status_code == 200:
+            st.session_state.api_error = None
+            return True
+    except (ConnectionError, Timeout, RequestException) as e:
+        st.session_state.api_error = f"Cannot connect to API: {str(e)}"
+        return False
+    except Exception as e:
+        st.session_state.api_error = f"Unknown error connecting to API: {str(e)}"
+        return False
+    
+    # Fallback for non-200 responses
+    st.session_state.api_error = f"API returned status code: {response.status_code}"
+    return False
+
+# Check API health on startup
+check_api_health()
 
 # --- Session State Setup ---
 if "messages" not in st.session_state:
@@ -56,58 +78,83 @@ if "loading_message" not in st.session_state:
     st.session_state.loading_message = ""
 if "operation_status" not in st.session_state:
     st.session_state.operation_status = None
+if "api_error" not in st.session_state:
+    st.session_state.api_error = None
 
 # --- Helper Functions ---
+
+def safe_api_request(method, endpoint, **kwargs):
+    """Make an API request with error handling"""
+    url = f"{API_URL}/{endpoint}"
+    try:
+        response = method(url, **kwargs, timeout=100)
+        return response.json()
+    except (ConnectionError, Timeout) as e:
+        st.session_state.api_error = f"Cannot connect to API: {str(e)}"
+        return {"error": f"Connection error: {str(e)}"}
+    except RequestException as e:
+        st.session_state.api_error = f"API request failed: {str(e)}"
+        return {"error": f"Request error: {str(e)}"}
+    except ValueError as e:  # Includes JSONDecodeError
+        st.session_state.api_error = f"Invalid response from API: {str(e)}"
+        return {"error": "Could not parse API response"}
+    except Exception as e:
+        st.session_state.api_error = f"Unexpected error: {str(e)}"
+        return {"error": f"Unexpected error: {str(e)}"}
+
 def get_sources():
-    return requests.get(f"{API_URL}/list_sources").json()["available_sources"]
+    result = safe_api_request(requests.get, "list_sources")
+    return result.get("available_sources", [])
 
 def get_source_spec(source_name):
-    j = requests.get(f"{API_URL}/source_spec/{source_name}").json()
-    return j.get("source_spec", j.get("error"))
+    result = safe_api_request(requests.get, f"source_spec/{source_name}")
+    return result.get("source_spec", result.get("error"))
 
 def configure_source(source_name, config):
-    return requests.post(f"{API_URL}/set_source_config", json={"source_name": source_name, "config": config}).json()
+    return safe_api_request(requests.post, "set_source_config", 
+                           json={"source_name": source_name, "config": config})
 
 def get_streams():
-    return requests.get(f"{API_URL}/streams").json()["available_streams"]
+    result = safe_api_request(requests.get, "streams")
+    return result.get("available_streams", [])
 
 def select_streams(streams):
-    return requests.post(f"{API_URL}/select_streams", json={"streams": streams}).json()
+    return safe_api_request(requests.post, "select_streams", json={"streams": streams})
 
 def create_kb(source_name, user_source_name, source_description="", streams=None, metadata_columns=None, content_columns=None):
-    return requests.post(f"{API_URL}/create_kb", json={
+    return safe_api_request(requests.post, "create_kb", json={
         "source_name": source_name,
         "user_source_name": user_source_name,
         "source_description": source_description,
         "streams": streams,
         "metadata_columns": metadata_columns,
         "content_columns": content_columns
-    }).json()
+    })
 
 def create_agent(kb_name=None):
-    return requests.post(f"{API_URL}/create_agent", json={"kb_name": kb_name}).json()
+    return safe_api_request(requests.post, "create_agent", json={"kb_name": kb_name})
 
 def ask_agent(question):
-    return requests.post(f"{API_URL}/ask", json={"query": question}).json()
+    return safe_api_request(requests.post, "ask", json={"query": question})
 
 def fetch_schema():
-    return requests.get(f"{API_URL}/fetch_schema").json()
+    return safe_api_request(requests.get, "fetch_schema")
 
 def get_kbs():
     if not st.session_state.kbs:
-        response = requests.get(f"{API_URL}/list_kbs").json()
+        response = safe_api_request(requests.get, "list_kbs")
         if isinstance(response, list):
             st.session_state.kbs = response
     return st.session_state.kbs
 
 def create_agent_skills(kb_names, db_names):
-    return requests.post(f"{API_URL}/create_agent_skills", json={
+    return safe_api_request(requests.post, "create_agent_skills", json={
         "kb_names": kb_names,
         "db_names": db_names
-    }).json()
+    })
 
 def cleanup_skills():
-    return requests.post(f"{API_URL}/cleanup_skills").json()
+    return safe_api_request(requests.post, "cleanup_skills")
 
 def show_loading(message: str):
     st.session_state.is_loading = True
@@ -122,7 +169,7 @@ def set_operation_status(status: str, message: str):
 
 def delete_source(source_name: str):
     """Delete a source and all its associated resources"""
-    return requests.delete(f"{API_URL}/delete_source/{source_name}").json()
+    return safe_api_request(requests.delete, f"delete_source/{source_name}")
 
 def normalize_db_name(source_name: str) -> str:
     """Generate consistent database name from source name"""
@@ -244,6 +291,15 @@ with st.sidebar:
             st.rerun()
 
 # --- Main Content Area ---
+# Display API error banner if there's an error
+if st.session_state.api_error:
+    st.error(f"🔌 API Connection Error: {st.session_state.api_error}", icon="🚨")
+    st.info("Please make sure the backend API is running at " + API_URL)
+    if st.button("🔄 Retry Connection"):
+        if check_api_health():
+            st.success("Connection restored!")
+            st.rerun()
+
 tab1, tab2 = st.tabs(["💬 Chat", "🔧 Manage Resources"])
 
 # --- Chat Tab ---

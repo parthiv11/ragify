@@ -21,6 +21,27 @@ load_dotenv()
 # Initialize FastAPI
 app = FastAPI(title="AI Agent with MindsDB + Airbyte")
 
+# Health check endpoint
+@app.get("/health")
+def health_check():
+    """Health check endpoint to verify API availability"""
+    try:
+        # Verify MindsDB connection
+        server_info = server.status()
+        return {
+            "status": "ok",
+            "message": "API is operational",
+            "mindsdb_status": "connected",
+            "timestamp": datetime.datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"API health check failed: {str(e)}",
+            "mindsdb_status": "disconnected",
+            "timestamp": datetime.datetime.utcnow().isoformat()
+        }
+
 # Connect to MindsDB
 while True:
     try:
@@ -36,7 +57,7 @@ while True:
 
 # Model Configuration from environment
 DEFAULT_AGENT_NAME = os.getenv('DEFAULT_AGENT_NAME', 'universal_agent')
-DEFAULT_MODEL_NAME = os.getenv('AGENT_MODEL_NAME', 'google/gemini-2.0-flash-exp:free')
+DEFAULT_MODEL_NAME = os.getenv('AGENT_MODEL_NAME', 'gpt-4o-mini')
 DEFAULT_PROMPT = os.getenv('AGENT_MODEL_PROMPT', 
     "Answer the user's question in a helpful way using the available skills when relevant: {{question}}")
 
@@ -90,7 +111,7 @@ except Exception:
             "temperature": MODEL_CONFIG['temperature'],
             "provider": MODEL_CONFIG['provider'],
             "openai_api_key": os.getenv('OPENAI_API_KEY', ''),
-            "base_url": os.getenv('OPENAI_API_BASE', 'https://api.openai.com'),
+            "base_url": os.getenv('OPENAI_API_BASE', 'https://api.openai.com/v1'),
             
         }
     )
@@ -157,9 +178,9 @@ def get_or_create_db_skill(db_name: str, description: str) -> Optional[str]:
     skill_name = f"db_skill_{db_name}"  # Simplified DB skill name
     try:
         # Try to find existing skill for this DB
-        existing_skills = [s for s in agent.skills if 
-                         s.type == 'sql' and 
-                         s.params.get('database') == db_name]
+        existing_skills = [skill for skill in server.skills.list() if
+                         skill.type == 'sql' and
+                         skill.params.get('database') == db_name]
         if existing_skills:
             return existing_skills[0].name
             
@@ -375,6 +396,7 @@ def create_kb(data: IngestData):
                         metadata_columns=data.metadata_columns.get(stream, []),
                         content_columns=data.content_columns.get(stream, []),
                         model=server.models.hf_embedding_model,
+                        id_column="id",
                     )
                 else:
                     kb = server.knowledge_bases.get(kb_name)
